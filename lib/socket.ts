@@ -19,16 +19,37 @@ class SocketService {
       return this.socket;
     }
 
-    // Simple WebSocket implementation for development
+    // Try WebSocket first, fallback to SSE if it fails
+    if (!this.useSSE) {
+      this.connectWebSocket();
+    } else {
+      console.log('Using SSE fallback mode');
+    }
+
+    return this.socket;
+  }
+
+  private connectWebSocket(): void {
     try {
       const wsUrl = SOCKET_URL.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws';
       console.log('Attempting WebSocket connection to:', wsUrl);
       this.socket = new WebSocket(wsUrl);
       
+      // Set connection timeout
+      const connectionTimeout = setTimeout(() => {
+        if (this.socket && this.socket.readyState === WebSocket.CONNECTING) {
+          console.log('WebSocket connection timeout, switching to SSE');
+          this.socket.close();
+          this.switchToSSE();
+        }
+      }, 10000); // 10 second timeout
+      
       this.socket.onopen = () => {
         console.log('✅ Connected to WebSocket server');
         this.isConnected = true;
         this.reconnectAttempts = 0;
+        this.useSSE = false;
+        clearTimeout(connectionTimeout);
         if (this.reconnectTimer) {
           clearTimeout(this.reconnectTimer);
           this.reconnectTimer = null;
@@ -38,12 +59,14 @@ class SocketService {
       this.socket.onclose = (event: CloseEvent) => {
         console.log('❌ WebSocket connection closed:', event.code, event.reason);
         this.isConnected = false;
+        clearTimeout(connectionTimeout);
         this.attemptReconnect();
       };
 
       this.socket.onerror = (error: any) => {
         console.error('🚨 WebSocket connection error:', error);
         this.isConnected = false;
+        clearTimeout(connectionTimeout);
       };
 
       this.socket.onmessage = (event: MessageEvent) => {
@@ -67,45 +90,40 @@ class SocketService {
   }
 
   private attemptReconnect(): void {
-    if (this.reconnectAttempts < this.maxReconnectAttempts) {
-      this.reconnectAttempts++;
-      console.log(`🔄 Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
-      
-      this.reconnectTimer = setTimeout(() => {
-        this.socket = null;
-        this.connect();
-      }, this.reconnectInterval);
-    } else {
-      console.warn('❌ WebSocket failed, switching to Server-Sent Events...');
-      this.useSSE = true;
-      this.connectSSE();
+    if (this.useSSE) {
+      return; // Don't reconnect WebSocket if using SSE
     }
+
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.log('Max WebSocket reconnection attempts reached. Switching to SSE fallback.');
+      this.switchToSSE();
+      return;
+    }
+
+    this.reconnectAttempts++;
+    console.log(`Attempting WebSocket reconnect... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+    
+    this.reconnectTimer = setTimeout(() => {
+      this.connectWebSocket();
+    }, this.reconnectInterval * this.reconnectAttempts); // Exponential backoff
   }
 
-  private connectSSE(): void {
-    // Get all unique hotel IDs from event listeners
-    const hotelIds = new Set<string>();
-    this.eventListeners.forEach((_, eventName) => {
-      const match = eventName.match(/^(roomUpdate|activityUpdate):(.+)$/);
-      if (match) {
-        hotelIds.add(match[2]);
-      }
-    });
+  private connectSSE(hotelId: string): void {
+    if (this.sseConnections.has(hotelId)) {
+      return; // Already connected for this hotel
+    }
 
-    // Create SSE connection for each hotel
-    hotelIds.forEach(hotelId => {
-      if (this.sseConnections.has(hotelId)) return;
-
-      const sseUrl = `${SOCKET_URL}/api/events/${hotelId}`;
-      console.log(`📡 Connecting to SSE for hotel ${hotelId}:`, sseUrl);
-      
+    const sseUrl = `${SOCKET_URL}/api/events/${hotelId}`;
+    console.log(`Connecting to SSE for hotel ${hotelId}:`, sseUrl);
+    
+    try {
       const eventSource = new EventSource(sseUrl);
       
       eventSource.onopen = () => {
         console.log(`✅ SSE connected for hotel ${hotelId}`);
         this.isConnected = true;
       };
-
+      
       eventSource.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
@@ -118,59 +136,87 @@ class SocketService {
           console.error('Error parsing SSE message:', error);
         }
       };
-
-      eventSource.onerror = (error) => {
-        console.error(`SSE error for hotel ${hotelId}:`, error);
-        eventSource.close();
-        this.sseConnections.delete(hotelId);
-      };
-
-      this.sseConnections.set(hotelId, eventSource);
-    });
-  }
-
-  private startPolling(): void {
-    if (this.pollingInterval) return;
-    
-    this.pollingInterval = setInterval(() => {
-      // Trigger refresh for all registered hotel IDs
-      const hotelIds = new Set<string>();
-      this.eventListeners.forEach((_, eventName) => {
-        const match = eventName.match(/^(roomUpdate|activityUpdate):(.+)$/);
-        if (match) {
-          hotelIds.add(match[2]);
-        }
-      });
       
-      // Simulate updates by triggering callbacks
-      hotelIds.forEach(hotelId => {
-        const roomListeners = this.eventListeners.get(`roomUpdate:${hotelId}`);
-        if (roomListeners) {
-          console.log(`📊 Polling update for hotel ${hotelId}`);
-          // You could fetch fresh data here if needed
-        }
-      });
-    }, 10000); // Poll every 10 seconds
+      eventSource.onerror = (error) => {
+        console.error(`SSE connection error for hotel ${hotelId}:`, error);
+        this.sseConnections.delete(hotelId);
+        
+        // Attempt to reconnect SSE after a delay with exponential backoff
+        const retryDelay = Math.min(5000 * Math.pow(2, this.reconnectAttempts), 30000);
+        setTimeout(() => {
+          if (this.useSSE && !this.sseConnections.has(hotelId)) {
+            this.reconnectAttempts++;
+            if (this.reconnectAttempts < this.maxReconnectAttempts) {
+              this.connectSSE(hotelId);
+            } else {
+              console.log(`Max SSE reconnection attempts reached for hotel ${hotelId}`);
+            }
+          }
+        }, retryDelay);
+      };
+      
+      this.sseConnections.set(hotelId, eventSource);
+    } catch (error) {
+      console.error(`Failed to create SSE connection for hotel ${hotelId}:`, error);
+    }
   }
 
-  disconnect(): void {
+  private switchToSSE(): void {
+    console.log('🔄 Switching to Server-Sent Events (SSE) fallback');
+    this.useSSE = true;
+    this.isConnected = false;
+    this.reconnectAttempts = 0;
+    
+    // Clean up WebSocket
     if (this.socket) {
       this.socket.close();
       this.socket = null;
-      this.isConnected = false;
     }
     
-    // Close all SSE connections
-    this.sseConnections.forEach((eventSource, hotelId) => {
-      eventSource.close();
-    });
-    this.sseConnections.clear();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     
-    // Clear polling
+    // SSE connections will be established per hotel when listeners are added
+  }
+
+  disconnect(): void {
+    console.log('🔌 Disconnecting from socket service');
+    
+    // Clear reconnection timer
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    
+    // Clear polling interval
     if (this.pollingInterval) {
       clearInterval(this.pollingInterval);
       this.pollingInterval = null;
     }
+    
+    // Close WebSocket connection
+    if (this.socket) {
+      this.socket.close();
+      this.socket = null;
+    }
+    
+    // Close all SSE connections
+    this.sseConnections.forEach((eventSource, hotelId) => {
+      console.log(`Closing SSE connection for hotel ${hotelId}`);
+      try {
+        eventSource.close();
+      } catch (error) {
+        console.error(`Error closing SSE connection for hotel ${hotelId}:`, error);
+      }
+    });
+    this.sseConnections.clear();
+    
+    this.isConnected = false;
+    this.useSSE = false;
+    this.reconnectAttempts = 0;
+    this.eventListeners.clear();
   }
 
   // Room update listeners
@@ -183,7 +229,7 @@ class SocketService {
     
     // Connect using appropriate method
     if (this.useSSE) {
-      this.connectSSE();
+      this.connectSSE(hotelId);
     } else if (!this.socket) {
       this.connect();
     }
@@ -210,7 +256,7 @@ class SocketService {
     
     // Connect using appropriate method
     if (this.useSSE) {
-      this.connectSSE();
+      this.connectSSE(hotelId);
     } else if (!this.socket) {
       this.connect();
     }
