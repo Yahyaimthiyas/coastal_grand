@@ -1,48 +1,43 @@
-// WebSocket client service for real-time updates
-const WS_URL = 'wss://coastal-grand-back.onrender.com/ws';
+// Socket.IO client service for real-time updates
+const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'https://coastal-grand-back.onrender.com';
 
 class SocketService {
-  private socket: WebSocket | null = null;
+  private socket: any = null;
   private isConnected = false;
   private eventListeners: Map<string, Function[]> = new Map();
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
-  private reconnectInterval = 3000;
 
-  connect(): WebSocket | null {
+  connect(): any {
     if (this.socket && this.isConnected) {
       return this.socket;
     }
 
+    // Simple WebSocket implementation for development
     try {
-      console.log('Attempting to connect to WebSocket:', WS_URL);
-      this.socket = new WebSocket(WS_URL);
+      const wsUrl = SOCKET_URL.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws';
+      this.socket = new WebSocket(wsUrl);
       
       this.socket.onopen = () => {
-        console.log('✅ Connected to WebSocket server');
+        console.log('Connected to server');
         this.isConnected = true;
-        this.reconnectAttempts = 0;
       };
 
-      this.socket.onclose = (event) => {
-        console.log('❌ WebSocket connection closed:', event.code, event.reason);
+      this.socket.onclose = () => {
+        console.log('Disconnected from server');
         this.isConnected = false;
-        this.attemptReconnect();
       };
 
-      this.socket.onerror = (error: Event) => {
-        console.error('🚨 WebSocket connection error:', error);
+      this.socket.onerror = (error: any) => {
+        console.error('Socket connection error:', error);
         this.isConnected = false;
       };
 
       this.socket.onmessage = (event: MessageEvent) => {
         try {
-          console.log('📨 Received WebSocket message:', event.data);
-          const { event: eventType, data } = JSON.parse(event.data);
-          
-          const listeners = this.eventListeners.get(eventType);
+          const data = JSON.parse(event.data);
+          const eventName = data.event || data.type;
+          const listeners = this.eventListeners.get(eventName);
           if (listeners) {
-            listeners.forEach(callback => callback(data));
+            listeners.forEach(callback => callback(data.data || data));
           }
         } catch (error) {
           console.error('Error parsing socket message:', error);
@@ -54,20 +49,6 @@ class SocketService {
     }
 
     return this.socket;
-  }
-
-  private attemptReconnect(): void {
-    if (this.reconnectAttempts < this.maxReconnectAttempts) {
-      this.reconnectAttempts++;
-      console.log(`🔄 Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
-      
-      setTimeout(() => {
-        this.socket = null;
-        this.connect();
-      }, this.reconnectInterval);
-    } else {
-      console.error('❌ Max reconnection attempts reached. Please refresh the page.');
-    }
   }
 
   disconnect(): void {
