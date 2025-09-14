@@ -1,19 +1,19 @@
-// Socket.IO client service for real-time updates
-const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'https://coastal-grand-back.onrender.com';
+// WebSocket client service for real-time updates
+const WS_URL = 'wss://coastal-grand-back.onrender.com/ws';
 
 class SocketService {
-  private socket: any = null;
+  private socket: WebSocket | null = null;
   private isConnected = false;
   private eventListeners: Map<string, Function[]> = new Map();
 
-  connect(): any {
+  connect(): WebSocket | null {
     if (this.socket && this.isConnected) {
       return this.socket;
     }
 
-    // Simple WebSocket implementation for development
+    // WebSocket implementation
     try {
-      this.socket = new WebSocket(SOCKET_URL.replace('http', 'ws'));
+      this.socket = new WebSocket(WS_URL);
       
       this.socket.onopen = () => {
         console.log('Connected to server');
@@ -25,18 +25,33 @@ class SocketService {
         this.isConnected = false;
       };
 
-      this.socket.onerror = (error: any) => {
+      this.socket.onerror = (error: Event) => {
         console.error('Socket connection error:', error);
         this.isConnected = false;
       };
 
       this.socket.onmessage = (event: MessageEvent) => {
         try {
-          const data = JSON.parse(event.data);
-          const eventName = data.event || data.type;
-          const listeners = this.eventListeners.get(eventName);
-          if (listeners) {
-            listeners.forEach(callback => callback(data.data || data));
+          const { event: eventType, data } = JSON.parse(event.data);
+          
+          if (eventType.startsWith('roomUpdate:')) {
+            // Handle room updates
+            const listeners = this.eventListeners.get(eventType);
+            if (listeners) {
+              listeners.forEach(callback => callback(data));
+            }
+          } else if (eventType.startsWith('activityUpdate:')) {
+            // Handle activity updates
+            const listeners = this.eventListeners.get(eventType);
+            if (listeners) {
+              listeners.forEach(callback => callback(data));
+            }
+          } else {
+            // Handle other events
+            const listeners = this.eventListeners.get(eventType);
+            if (listeners) {
+              listeners.forEach(callback => callback(data));
+            }
           }
         } catch (error) {
           console.error('Error parsing socket message:', error);
