@@ -1,4 +1,5 @@
 // WebSocket client service for real-time updates
+// Connect to the live Render server
 const WS_URL = 'wss://coastal-grand-back.onrender.com/ws';
 
 class SocketService {
