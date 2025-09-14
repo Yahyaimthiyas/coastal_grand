@@ -11,6 +11,8 @@ class SocketService {
   private reconnectTimer: any = null;
   private fallbackToPolling = false;
   private pollingInterval: any = null;
+  private sseConnections: Map<string, EventSource> = new Map();
+  private useSSE = false;
 
   connect(): any {
     if (this.socket && this.isConnected) {
@@ -74,10 +76,57 @@ class SocketService {
         this.connect();
       }, this.reconnectInterval);
     } else {
-      console.warn('❌ WebSocket failed, falling back to polling for updates...');
-      this.fallbackToPolling = true;
-      this.startPolling();
+      console.warn('❌ WebSocket failed, switching to Server-Sent Events...');
+      this.useSSE = true;
+      this.connectSSE();
     }
+  }
+
+  private connectSSE(): void {
+    // Get all unique hotel IDs from event listeners
+    const hotelIds = new Set<string>();
+    this.eventListeners.forEach((_, eventName) => {
+      const match = eventName.match(/^(roomUpdate|activityUpdate):(.+)$/);
+      if (match) {
+        hotelIds.add(match[2]);
+      }
+    });
+
+    // Create SSE connection for each hotel
+    hotelIds.forEach(hotelId => {
+      if (this.sseConnections.has(hotelId)) return;
+
+      const sseUrl = `${SOCKET_URL}/api/events/${hotelId}`;
+      console.log(`📡 Connecting to SSE for hotel ${hotelId}:`, sseUrl);
+      
+      const eventSource = new EventSource(sseUrl);
+      
+      eventSource.onopen = () => {
+        console.log(`✅ SSE connected for hotel ${hotelId}`);
+        this.isConnected = true;
+      };
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          const eventName = data.event || data.type;
+          const listeners = this.eventListeners.get(eventName);
+          if (listeners) {
+            listeners.forEach(callback => callback(data.data || data));
+          }
+        } catch (error) {
+          console.error('Error parsing SSE message:', error);
+        }
+      };
+
+      eventSource.onerror = (error) => {
+        console.error(`SSE error for hotel ${hotelId}:`, error);
+        eventSource.close();
+        this.sseConnections.delete(hotelId);
+      };
+
+      this.sseConnections.set(hotelId, eventSource);
+    });
   }
 
   private startPolling(): void {
@@ -110,19 +159,34 @@ class SocketService {
       this.socket = null;
       this.isConnected = false;
     }
+    
+    // Close all SSE connections
+    this.sseConnections.forEach((eventSource, hotelId) => {
+      eventSource.close();
+    });
+    this.sseConnections.clear();
+    
+    // Clear polling
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
+    }
   }
 
   // Room update listeners
   onRoomUpdate(hotelId: string, callback: (data: any) => void): void {
-    if (!this.socket) {
-      this.connect();
-    }
-    
     const eventName = `roomUpdate:${hotelId}`;
     if (!this.eventListeners.has(eventName)) {
       this.eventListeners.set(eventName, []);
     }
     this.eventListeners.get(eventName)!.push(callback);
+    
+    // Connect using appropriate method
+    if (this.useSSE) {
+      this.connectSSE();
+    } else if (!this.socket) {
+      this.connect();
+    }
   }
 
   offRoomUpdate(hotelId: string, callback?: (data: any) => void): void {
@@ -138,15 +202,18 @@ class SocketService {
 
   // Activity update listeners
   onActivityUpdate(hotelId: string, callback: (data: any) => void): void {
-    if (!this.socket) {
-      this.connect();
-    }
-    
     const eventName = `activityUpdate:${hotelId}`;
     if (!this.eventListeners.has(eventName)) {
       this.eventListeners.set(eventName, []);
     }
     this.eventListeners.get(eventName)!.push(callback);
+    
+    // Connect using appropriate method
+    if (this.useSSE) {
+      this.connectSSE();
+    } else if (!this.socket) {
+      this.connect();
+    }
   }
 
   offActivityUpdate(hotelId: string, callback?: (data: any) => void): void {
