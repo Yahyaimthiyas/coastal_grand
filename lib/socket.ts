@@ -5,6 +5,9 @@ class SocketService {
   private socket: WebSocket | null = null;
   private isConnected = false;
   private eventListeners: Map<string, Function[]> = new Map();
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+  private reconnectInterval = 3000; // 3 seconds
 
   connect(): WebSocket | null {
     if (this.socket && this.isConnected) {
@@ -13,25 +16,29 @@ class SocketService {
 
     // WebSocket implementation
     try {
+      console.log('Attempting to connect to WebSocket:', WS_URL);
       this.socket = new WebSocket(WS_URL);
       
       this.socket.onopen = () => {
-        console.log('Connected to server');
+        console.log('✅ Connected to WebSocket server');
         this.isConnected = true;
+        this.reconnectAttempts = 0; // Reset reconnect attempts on successful connection
       };
 
-      this.socket.onclose = () => {
-        console.log('Disconnected from server');
+      this.socket.onclose = (event) => {
+        console.log('❌ WebSocket connection closed:', event.code, event.reason);
         this.isConnected = false;
+        this.attemptReconnect();
       };
 
       this.socket.onerror = (error: Event) => {
-        console.error('Socket connection error:', error);
+        console.error('🚨 WebSocket connection error:', error);
         this.isConnected = false;
       };
 
       this.socket.onmessage = (event: MessageEvent) => {
         try {
+          console.log('📨 Received WebSocket message:', event.data);
           const { event: eventType, data } = JSON.parse(event.data);
           
           if (eventType.startsWith('roomUpdate:')) {
@@ -63,6 +70,20 @@ class SocketService {
     }
 
     return this.socket;
+  }
+
+  private attemptReconnect(): void {
+    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+      this.reconnectAttempts++;
+      console.log(`🔄 Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+      
+      setTimeout(() => {
+        this.socket = null;
+        this.connect();
+      }, this.reconnectInterval);
+    } else {
+      console.error('❌ Max reconnection attempts reached. Please refresh the page.');
+    }
   }
 
   disconnect(): void {
