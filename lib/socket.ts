@@ -6,17 +6,25 @@ class SocketService {
   private isConnected = false;
   private eventListeners: Map<string, Function[]> = new Map();
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
-  private reconnectInterval = 3000;
+  private maxReconnectAttempts = 2; // Reduced from 5 to 2 for faster fallback
+  private reconnectInterval = 1000; // Reduced from 3000ms to 1000ms
   private reconnectTimer: any = null;
   private fallbackToPolling = false;
   private pollingInterval: any = null;
   private sseConnections: Map<string, EventSource> = new Map();
   private useSSE = false;
+  private isRenderEnvironment = SOCKET_URL.includes('onrender.com'); // Detect Render environment
 
   connect(): any {
     if (this.socket && this.isConnected) {
       return this.socket;
+    }
+
+    // If we're on Render, skip WebSocket and go directly to SSE
+    if (this.isRenderEnvironment && !this.useSSE) {
+      console.log('Render environment detected, using SSE directly for better reliability');
+      this.switchToSSE();
+      return null;
     }
 
     // Try WebSocket first, fallback to SSE if it fails
@@ -35,14 +43,14 @@ class SocketService {
       console.log('Attempting WebSocket connection to:', wsUrl);
       this.socket = new WebSocket(wsUrl);
       
-      // Set connection timeout
+      // Set connection timeout - much faster for immediate fallback
       const connectionTimeout = setTimeout(() => {
         if (this.socket && this.socket.readyState === WebSocket.CONNECTING) {
           console.log('WebSocket connection timeout, switching to SSE');
           this.socket.close();
           this.switchToSSE();
         }
-      }, 10000); // 10 second timeout
+      }, 3000); // Reduced from 10s to 3s timeout
       
       this.socket.onopen = () => {
         console.log('✅ Connected to WebSocket server');
@@ -60,13 +68,26 @@ class SocketService {
         console.log('❌ WebSocket connection closed:', event.code, event.reason);
         this.isConnected = false;
         clearTimeout(connectionTimeout);
-        this.attemptReconnect();
+        
+        // If it's error 1006 (connection blocked), switch to SSE immediately
+        if (event.code === 1006) {
+          console.log('WebSocket blocked (1006), switching to SSE immediately');
+          this.switchToSSE();
+        } else {
+          this.attemptReconnect();
+        }
       };
 
       this.socket.onerror = (error: any) => {
         console.error('🚨 WebSocket connection error:', error);
         this.isConnected = false;
         clearTimeout(connectionTimeout);
+        
+        // On error, immediately try SSE if we haven't already
+        if (!this.useSSE && this.reconnectAttempts >= 1) {
+          console.log('WebSocket error after retry, switching to SSE');
+          this.switchToSSE();
+        }
       };
 
       this.socket.onmessage = (event: MessageEvent) => {
@@ -105,7 +126,7 @@ class SocketService {
     
     this.reconnectTimer = setTimeout(() => {
       this.connectWebSocket();
-    }, this.reconnectInterval * this.reconnectAttempts); // Exponential backoff
+    }, this.reconnectInterval); // Fixed interval for faster reconnection
   }
 
   private connectSSE(hotelId: string): void {
