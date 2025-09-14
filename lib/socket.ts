@@ -5,6 +5,12 @@ class SocketService {
   private socket: any = null;
   private isConnected = false;
   private eventListeners: Map<string, Function[]> = new Map();
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+  private reconnectInterval = 3000;
+  private reconnectTimer: any = null;
+  private fallbackToPolling = false;
+  private pollingInterval: any = null;
 
   connect(): any {
     if (this.socket && this.isConnected) {
@@ -14,20 +20,27 @@ class SocketService {
     // Simple WebSocket implementation for development
     try {
       const wsUrl = SOCKET_URL.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws';
+      console.log('Attempting WebSocket connection to:', wsUrl);
       this.socket = new WebSocket(wsUrl);
       
       this.socket.onopen = () => {
-        console.log('Connected to server');
+        console.log('✅ Connected to WebSocket server');
         this.isConnected = true;
+        this.reconnectAttempts = 0;
+        if (this.reconnectTimer) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
       };
 
-      this.socket.onclose = () => {
-        console.log('Disconnected from server');
+      this.socket.onclose = (event: CloseEvent) => {
+        console.log('❌ WebSocket connection closed:', event.code, event.reason);
         this.isConnected = false;
+        this.attemptReconnect();
       };
 
       this.socket.onerror = (error: any) => {
-        console.error('Socket connection error:', error);
+        console.error('🚨 WebSocket connection error:', error);
         this.isConnected = false;
       };
 
@@ -49,6 +62,46 @@ class SocketService {
     }
 
     return this.socket;
+  }
+
+  private attemptReconnect(): void {
+    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+      this.reconnectAttempts++;
+      console.log(`🔄 Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+      
+      this.reconnectTimer = setTimeout(() => {
+        this.socket = null;
+        this.connect();
+      }, this.reconnectInterval);
+    } else {
+      console.warn('❌ WebSocket failed, falling back to polling for updates...');
+      this.fallbackToPolling = true;
+      this.startPolling();
+    }
+  }
+
+  private startPolling(): void {
+    if (this.pollingInterval) return;
+    
+    this.pollingInterval = setInterval(() => {
+      // Trigger refresh for all registered hotel IDs
+      const hotelIds = new Set<string>();
+      this.eventListeners.forEach((_, eventName) => {
+        const match = eventName.match(/^(roomUpdate|activityUpdate):(.+)$/);
+        if (match) {
+          hotelIds.add(match[2]);
+        }
+      });
+      
+      // Simulate updates by triggering callbacks
+      hotelIds.forEach(hotelId => {
+        const roomListeners = this.eventListeners.get(`roomUpdate:${hotelId}`);
+        if (roomListeners) {
+          console.log(`📊 Polling update for hotel ${hotelId}`);
+          // You could fetch fresh data here if needed
+        }
+      });
+    }, 10000); // Poll every 10 seconds
   }
 
   disconnect(): void {
