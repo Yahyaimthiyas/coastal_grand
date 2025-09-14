@@ -1,7 +1,7 @@
 // Simple test script to verify backend is working
 const fetch = require('node-fetch');
 
-const API_BASE_URL = 'http://localhost:3000';
+const API_BASE_URL = 'https://coastal-grand-back.onrender.com';
 
 async function testBackend() {
   console.log('🧪 Testing Backend API...\n');

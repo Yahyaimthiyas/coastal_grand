@@ -1,5 +1,5 @@
 // Socket.IO client service for real-time updates
-const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3000';
+const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'https://coastal-grand-back.onrender.com';
 
 class SocketService {
   private socket: any = null;

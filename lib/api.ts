@@ -1,5 +1,5 @@
 // API service layer for connecting to live server
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://coastal-grand-back.onrender.com';
 
 export interface Hotel {
   id: string;
