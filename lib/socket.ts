@@ -1,5 +1,4 @@
 // WebSocket client service for real-time updates
-// Connect to the live Render server
 const WS_URL = 'wss://coastal-grand-back.onrender.com/ws';
 
 class SocketService {
@@ -8,14 +7,13 @@ class SocketService {
   private eventListeners: Map<string, Function[]> = new Map();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
-  private reconnectInterval = 3000; // 3 seconds
+  private reconnectInterval = 3000;
 
   connect(): WebSocket | null {
     if (this.socket && this.isConnected) {
       return this.socket;
     }
 
-    // WebSocket implementation
     try {
       console.log('Attempting to connect to WebSocket:', WS_URL);
       this.socket = new WebSocket(WS_URL);
@@ -23,7 +21,7 @@ class SocketService {
       this.socket.onopen = () => {
         console.log('✅ Connected to WebSocket server');
         this.isConnected = true;
-        this.reconnectAttempts = 0; // Reset reconnect attempts on successful connection
+        this.reconnectAttempts = 0;
       };
 
       this.socket.onclose = (event) => {
@@ -42,24 +40,9 @@ class SocketService {
           console.log('📨 Received WebSocket message:', event.data);
           const { event: eventType, data } = JSON.parse(event.data);
           
-          if (eventType.startsWith('roomUpdate:')) {
-            // Handle room updates
-            const listeners = this.eventListeners.get(eventType);
-            if (listeners) {
-              listeners.forEach(callback => callback(data));
-            }
-          } else if (eventType.startsWith('activityUpdate:')) {
-            // Handle activity updates
-            const listeners = this.eventListeners.get(eventType);
-            if (listeners) {
-              listeners.forEach(callback => callback(data));
-            }
-          } else {
-            // Handle other events
-            const listeners = this.eventListeners.get(eventType);
-            if (listeners) {
-              listeners.forEach(callback => callback(data));
-            }
+          const listeners = this.eventListeners.get(eventType);
+          if (listeners) {
+            listeners.forEach(callback => callback(data));
           }
         } catch (error) {
           console.error('Error parsing socket message:', error);
